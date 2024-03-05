@@ -8,3 +8,5 @@ It allows the following features:
 
 Check the documentation for more information. Tutorial examples are also avalaible.
   
+To cite this work:
+DOI: 10.5281/zenodo.10694186 
