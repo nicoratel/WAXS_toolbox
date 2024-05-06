@@ -1,7 +1,6 @@
 from PyQt5 import QtWidgets,QtCore,QtGui
 import sys
 import os
-import webbrowser
 import numpy as np
 import matplotlib as mpl
 from matplotlib import pyplot as plt
@@ -22,8 +21,9 @@ from scipy.optimize import least_squares
 from diffpy.srfit.structure import constrainAsSpaceGroup
 from diffpy.srfit.pdf.characteristicfunctions import sphericalCF
 import multiprocessing
-import h5py
-import hdf5plugin
+import subprocess
+
+
 class EmittingStream(QtCore.QObject):
 
     textWritten = QtCore.pyqtSignal(str)
@@ -41,7 +41,11 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         
         self.ui = Ui_WAXS_toolbox()
         self.ui.setupUi(self)
-        # initialize stdout
+        
+        # initialize variables
+        self.outputpath=os.getcwd()
+        self.outputfullpath_gr=os.getcwd()
+        self.outputfullpath_iq=os.getcwd()
         
         sys.stdout = EmittingStream(textWritten=self.normalOutputWritten)
         
@@ -121,7 +125,10 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         return
         
     def getWD(self):
-        self.path=QtWidgets.QFileDialog.getExistingDirectory()
+        try:
+            self.path=QtWidgets.QFileDialog.getExistingDirectory(None, "Select Directory", '/home-local/ratel-ra/Documents/PDF_data')
+        except:
+            self.path=QtWidgets.QFileDialog.getExistingDirectory()
         self.ui.Console_textEdit.insertPlainText("Working directory was set to %s" %self.path + "\n")
         self.ui.Path_lineEdit.setText("%s"%self.path)
         self.ui.Path2_lineEdit.setText("%s"%self.path)
@@ -260,28 +267,35 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         list atoms with x y z absolute coordinates
         """
         sphere=makeSphere(loadStructure(cif_file),radius)
-        #Since diffpy.structure.expansion.makesphere computes fractional coordinates, 
-        # each xyz coordinate must be multiplied by the corresponding lattice parameter.
-        a=sphere.lattice.a
-        b=sphere.lattice.b
-        c=sphere.lattice.c
-        
-        xs=sphere.x*a
-        ys=sphere.y*b
-        zs=sphere.z*c
-        r=(sphere.x**2+sphere.y**2+sphere.z**2)**(1/2)
-        #self.ui.Console_textEdit.insertPlainText(r)
-        rs=(xs**2+ys**2+zs**2)**(1/2)
-        #self.ui.Console_textEdit.insertPlainText(rs)
         composition=sphere.composition
-        #element=sphere.element
+        # transform fractional to cartesian coordinates
+        atom_number=len(sphere.x)
+        xyz_array=np.empty((atom_number,3))
+        for i in range(atom_number):
+            u=[sphere.x[i],sphere.y[i],sphere.z[i]]
+            xyz_array[i]=sphere.lattice.cartesian(u)
+            
+        print('shape xyz_array',np.shape(xyz_array))
+        
+        # center coordinates
+        # calculate center
+        x0=np.mean(xyz_array[:,0])
+        y0=np.mean(xyz_array[:,1])
+        z0=np.mean(xyz_array[:,2])
+          
+        structure={}
         atom_number=len(sphere)
+        for i in range(atom_number):
+            element=''.join(filter(str.isalpha, sphere.element[i]))
+            key=element+str(i)
+            structure.update({key:[xyz_array[i,0]-x0,xyz_array[i,1]-y0,xyz_array[i,2]-z0]})
+            
         xyz=open(str(xyz_filename),'w')
         xyz.write(str(atom_number)+'\n')
         xyz.write(str(composition)+'\n')
-        for i in range(atom_number):
-            element=''.join(filter(str.isalpha, sphere.element[i]))
-            xyz.write(element+'\t'+str(xs[i])+'\t'+str(ys[i])+'\t'+str(zs[i])+'\n')
+        for key in structure:
+            element=''.join(filter(str.isalpha, key))
+            xyz.write(element+'\t'+str(structure[key][0])+'\t'+str(structure[key][1])+'\t'+str(structure[key][2])+'\n')
         xyz.close()
         return
     
@@ -298,21 +312,31 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         ellipse=makeEllipsoid(loadStructure(cif_file),a_radius,b_radius,c_radius)
         #Since diffpy.structure.expansion.makesphere computes fractional coordinates, 
         # each xyz coordinate must be multiplied by the corresponding lattice parameter.
-        a=ellipse.lattice.a
-        b=ellipse.lattice.b
-        c=ellipse.lattice.c
-        xs=ellipse.x*a
-        ys=ellipse.y*b
-        zs=ellipse.z*c
         composition=ellipse.composition
-        #element=ellipse.element
+        
         atom_number=len(ellipse)
+        xyz_array=np.empty((atom_number,3))
+        for i in range(atom_number):
+            u=[ellipse.x[i],ellipse.y[i],ellipse.z[i]]
+            xyz_array[i]=ellipse.lattice.cartesian(u)        
+        # calculate center
+        x0=np.mean(xyz_array[:,0])
+        y0=np.mean(xyz_array[:,1])
+        z0=np.mean(xyz_array[:,2])
+        
+        structure={}
+        atom_number=len(ellipse)
+        for i in range(atom_number):
+            element=''.join(filter(str.isalpha, ellipse.element[i]))
+            key=element+str(i)
+            structure.update({key:[xyz_array[i,0]-x0,xyz_array[i,1]-y0,xyz_array[i,2]-z0]})
+            
         xyz=open(str(xyz_filename),'w')
         xyz.write(str(atom_number)+'\n')
         xyz.write(str(composition)+'\n')
-        for i in range(atom_number):
-            element=''.join(filter(str.isalpha, ellipse.element[i]))
-            xyz.write(element+'\t'+str(xs[i])+'\t'+str(ys[i])+'\t'+str(zs[i])+'\n')
+        for key in structure:
+            element=''.join(filter(str.isalpha, key))
+            xyz.write(element+'\t'+str(structure[key][0])+'\t'+str(structure[key][1])+'\t'+str(structure[key][2])+'\n')
         xyz.close()
         return
     
@@ -428,7 +452,10 @@ class ApplicationWindow(QtWidgets.QMainWindow):
             cylinder.write(xyz_filename, 'xyz')
         return    
     def openciffile(self):
-        self.cifpath= QtWidgets.QFileDialog.getOpenFileName( self,"Open cif file",self.path,'*.cif')
+        try:
+            self.cifpath= QtWidgets.QFileDialog.getOpenFileName( self,"Open cif file",'/home-local/ratel-ra/Documents/CIF_database','*.cif')
+        except:
+            self.cifpath= QtWidgets.QFileDialog.getOpenFileName( self,"Open cif file",self.path,'*.cif')
         self.ui.cifpath_lineEdit.setText(os.path.basename(self.cifpath[0]))
         
         self.ui.Console_textEdit.insertPlainText('Cif file is %s'%self.cifpath[0]+'.\n')
@@ -511,8 +538,57 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         self.ui.simu_Stru_File_lineEdit.setText(res)
         return self.simu_strufile
     
+    def f_complex(self,element,q,energy):
+        # define the script to run in python >3.8
+        python_script="""
+import sys
+import larch
+import numpy as np
+from larch.xray import f0,f1_chantler,f2_chantler
+
+def complex_form_factor(element,q,energy):
+    q=np.array(eval(q))
+    energy=int(energy)
+    
+    f_0=f0(element,q)
+    f1=f1_chantler(element,energy)
+    f2=f2_chantler(element,energy)
+    f=np.empty_like(q,dtype=complex)
+    for i in range(len(q)):
+        f[i]=f_0[i]+f1+1j*f2
+    return f
+    
+if __name__=="__main__":
+    element=sys.argv[1]
+    q=sys.argv[2]
+    energy=sys.argv[3]
+    f=complex_form_factor(element,q,energy)
+    print(f)
+"""
+        
+        # Write the script to a temporary file
+        with open('temp_script.py', 'w') as file:
+            file.write(python_script)
+            
+        
+        # Run Larch to compute complex form factor
+        python_path="/home-local/ratel-ra/anaconda3_c/bin/python"
+        args=[element,np.array2string(q,separator=','),str(energy)]
+        
+        result = subprocess.run(["/home-local/ratel-ra/anaconda3_c/bin/python",'temp_script.py']+args,stdout=subprocess.PIPE)
+        output = result.stdout.decode('utf-8')
+        
+        # remove brackets
+        fvals=output.replace('[','').replace(']','').split()
+        
+        n=len(q);farray=np.empty_like(q,dtype=complex)
+        for i in range(n):
+            farray[i]=complex(fvals[i])
+        return farray    
+    
     def iofq(self):
-        from complex_form_factor import _f_complex,_f0,atomicformfactor_nist
+        
+        #from complex_form_factor import _f_complex,_f0,atomicformfactor_nist
         """Calculate I(Q) (X-ray) using the Debye Equation.
         
         I(Q) = 2 sum(i,j) f_i(Q) f_j(Q) sinc(rij Q) exp(-0.5 ssij Q**2)
@@ -529,6 +605,7 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         qmax=float(self.ui.iq_qmax_lineEdit.text())
         qstep=float(self.ui.iq_qstep_lineEdit.text())
         wavelength=float(self.ui.wavelength_lineEdit.text())
+        energy=int(12314/wavelength)
         q=np.arange(qmin,qmax,qstep)
         # The functions we need
         sinc = np.sinc
@@ -538,28 +615,16 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         S = Structure()
         S.read(str(self.simu_strufile))
         S.Uisoequiv=float(self.ui.Uij_lineEdit.text())
-        """
-        h5filename='/home-local/ratel-ra/Documents/Ressources/fact_at_Ka_Mo_qstep_2e-3.h5'
-        f=h5py.File(h5filename,'r') 
-        nb_grp=0
-        for group in f:
-                nb_grp+=1            
-        atom_list=np.zeros(nb_grp,dtype='U2')
-        f_at_list=np.zeros((nb_grp,len(q)),dtype='complex128')
-        k=0
-        for group in f:
-                atom=(str(group))
-                atom_list[k]=atom
-                f_at=np.array(f[group+'/fact_at']); f_at_list[k]=f_at
-                k+=1 
-        f.close()
-        """
+        
+        
+        
         # The brute-force calculation is very slow. Thus we optimize a little bit.
         # The precision of distance measurements
         deltad = 1e-6
         dmult = int(1/deltad)
         deltau = deltad**2
         umult = int(1/deltau)
+        
         pairdict = {}
         elcount = {}
         n = len(S)
@@ -598,16 +663,7 @@ class ApplicationWindow(QtWidgets.QMainWindow):
     # First we must cache the scattering factors
         fdict = {}
         for el in elcount:
-                #print(el)
-                try:
-                    fdict[el]=_f_complex(el,qmin,qmax,qstep,wavelength)
-                    #fdict[el]=_f0(qmin,qmax,qstep,el)
-                    self.ui.Console_textEdit.insertPlainText('X-Ray form factor of element %s'%str(el)+' computed in its complex form, including dispersive components \n')
-                except:
-                    fdict[el]=_f0(qmin,qmax,qstep,el)
-                    self.ui.Console_textEdit.insertPlainText('X-Ray form factor of element %s'%str(el)+' computed as f0 \n')
-                    #fdict[el] = f_at_list[list(atom_list).index(el)]
-                #print('form factor for element %s'%str(el)+' is:',fdict[el])
+            fdict[el]=self.f_complex(str(el),q,energy)
 
     # Now we can compute I(Q) for the i != j pairs
         y = 0
@@ -630,8 +686,6 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         # Now we must add in the i == j pairs.
         for el, f in fdict.items():
                 y += np.abs(f**2) * elcount[el]
-
-    
 
         return np.array([q,y])    
     
@@ -822,7 +876,7 @@ class ApplicationWindow(QtWidgets.QMainWindow):
             recipe.addVar(contribution.psize,float(self.ui.diameter_lineEdit.text()),tag="radius")
             self.ui.Console_textEdit.insertPlainText("psize variable added to recipe")
             rmin_str=str(self.ui.rminlineEdit.text())
-            if rmin!='':
+            if rmin_str!='':
                 rmin=float(rmin_str)
                 recipe.restrain(contribution.psize,lb=rmin,ub=np.inf,scaled=True,sig=0.00001)
        
@@ -1117,6 +1171,17 @@ class ApplicationWindow(QtWidgets.QMainWindow):
 
         # Write the fit results to a file.
         header = "%s"%str(basename)+".\n"
+        header+="data file:%s"%str(self.exp_pdf)+"\n"
+        header+="structure file:%s"%str(self.fit_strufile)+"\n"
+        
+        header+="Fitting parameters \n"
+        header+="rmin=%f"%float(self.ui.rmin_lineEdit.text())+"\n"
+        header+="rmax=%f"%float(self.ui.rmax_lineEdit.text())+"\n"
+        header+="rstep=%f"%float(self.ui.rstep_lineEdit.text())+"\n"
+        header+="QBROAD=%f"%float(self.ui.qbroad_lineEdit.text())+"\n"
+        header+="QDAMP=%f"%float(self.ui.qdamp_lineEdit.text())+"\n"
+        header+="QMIN=%f"%float(self.ui.qmin_lineEdit.text())+"\n"
+        header+="QMAX=%f"%float(self.ui.qmax_lineEdit.text())+"\n"
         res.saveResults(resdir / f"{basename}.res", header=header)
 
         # Write a plot of the fit to a (pdf) file.
